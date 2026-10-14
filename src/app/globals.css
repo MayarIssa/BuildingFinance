@@ -1,0 +1,469 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --color-chart-7: var(--chart-7);
+  --color-chart-8: var(--chart-8);
+  --color-seq-1: var(--seq-1);
+  --color-seq-2: var(--seq-2);
+  --color-seq-3: var(--seq-3);
+  --color-seq-4: var(--seq-4);
+  --color-seq-5: var(--seq-5);
+  --color-cat-1: var(--cat-1);
+  --color-cat-2: var(--cat-2);
+  --color-cat-3: var(--cat-3);
+  --color-cat-4: var(--cat-4);
+  --color-cat-5: var(--cat-5);
+  --color-cat-6: var(--cat-6);
+  --color-pos: var(--pos);
+  --color-neg: var(--neg);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/*
+  Palette — warm stone neutrals + a deep emerald primary. Chosen to read as
+  "finance / wealth" rather than a technical console. The chart ramps below
+  were validated with the data-viz palette script (CVD, lightness band,
+  chroma floor, surface contrast) against the card surfaces in each mode.
+*/
+:root {
+  --radius: 0.75rem;
+
+  --background: #f6f4ef;   /* warm page plane */
+  --foreground: #1b1a16;   /* warm near-black ink */
+  --card: #fffdf9;         /* card surface (validator surface) */
+  --card-foreground: #1b1a16;
+  --popover: #fffdf9;
+  --popover-foreground: #1b1a16;
+
+  --primary: #0b7a55;      /* deep emerald */
+  --primary-foreground: #ffffff;
+  --secondary: #efece4;
+  --secondary-foreground: #1b1a16;
+  --muted: #efece4;
+  --muted-foreground: #736e64;
+  --accent: #eae6db;
+  --accent-foreground: #1b1a16;
+
+  --destructive: #c1502e;  /* warm clay, not alarm-red */
+  --destructive-foreground: #ffffff;
+  --success: #0b7a55;
+  --success-foreground: #ffffff;
+  --warning: #c8891f;
+  --warning-foreground: #1b1a16;
+
+  --border: #e6e1d7;
+  --input: #e6e1d7;
+  --ring: #0b7a55;
+
+  --sidebar: #efece4;
+  --sidebar-foreground: #1b1a16;
+  --sidebar-border: #e2ddd1;
+  --sidebar-accent: #e4dfd3;
+  --sidebar-accent-foreground: #0b7a55;
+
+  /* positive / negative deltas (text tokens, not series colors) */
+  --pos: #006844;
+  --neg: #b0472a;
+
+  /* categorical chart hues — emerald · clay · plum · amber */
+  --chart-1: #0b7a55;
+  --chart-2: #c1502e;
+  --chart-3: #8f4a86;
+  --chart-4: #c8891f;
+  --chart-5: #178f64;
+  --chart-6: #a5623a;
+  --chart-7: #6f6f2f;
+  --chart-8: #b06aa0;
+
+  /* emerald sequential ramp (light→… ) for the category donut */
+  --seq-1: #0a4a34;
+  --seq-2: #106a4b;
+  --seq-3: #178f64;
+  --seq-4: #28ab81;
+  --seq-5: #5cc79f;
+
+  /* distinct categorical hues for the category donut (validated CVD ≥ 17) */
+  --cat-1: #0b7a55;
+  --cat-2: #c8891f;
+  --cat-3: #8f4a86;
+  --cat-4: #2a72b8;
+  --cat-5: #c1502e;
+  --cat-6: #b5487f;
+
+  --hero-from: #0b7a55;
+  --hero-to: #0a5f45;
+}
+
+.dark {
+  --background: #141310;
+  --foreground: #f4f1ea;
+  --card: #1f1d18;
+  --card-foreground: #f4f1ea;
+  --popover: #1f1d18;
+  --popover-foreground: #f4f1ea;
+
+  --primary: #26a179;
+  --primary-foreground: #08120d;
+  --secondary: #2a271f;
+  --secondary-foreground: #f4f1ea;
+  --muted: #2a271f;
+  --muted-foreground: #a49d90;
+  --accent: #302c24;
+  --accent-foreground: #f4f1ea;
+
+  --destructive: #e0674a;
+  --destructive-foreground: #1b120e;
+  --success: #26a179;
+  --success-foreground: #08120d;
+  --warning: #d69a37;
+  --warning-foreground: #1b1a16;
+
+  --border: #302c24;
+  --input: #302c24;
+  --ring: #26a179;
+
+  --sidebar: #1a1813;
+  --sidebar-foreground: #f4f1ea;
+  --sidebar-border: #302c24;
+  --sidebar-accent: #2a271f;
+  --sidebar-accent-foreground: #26a179;
+
+  --pos: #4cc79a;
+  --neg: #e0674a;
+
+  --chart-1: #26a179;
+  --chart-2: #e0674a;
+  --chart-3: #b06aa0;
+  --chart-4: #b8802f;
+  --chart-5: #33ab7d;
+  --chart-6: #d0824f;
+  --chart-7: #a8a34f;
+  --chart-8: #c88ac0;
+
+  --seq-1: #1d6b4b;
+  --seq-2: #268f64;
+  --seq-3: #33ab7d;
+  --seq-4: #52c296;
+  --seq-5: #8ad9bd;
+
+  --cat-1: #22a074;
+  --cat-2: #bd8629;
+  --cat-3: #b06aa0;
+  --cat-4: #5b93d0;
+  --cat-5: #e0674a;
+  --cat-6: #cf6f9f;
+
+  --hero-from: #0f7a58;
+  --hero-to: #0a5b43;
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+}
+
+/* Recharts defaults assume a light page — retint every piece of chart
+   text and line work with the theme so dark mode stays readable */
+.recharts-text,
+.recharts-cartesian-axis-tick-value,
+.recharts-legend-item-text {
+  fill: var(--muted-foreground);
+  color: var(--muted-foreground);
+}
+
+.recharts-pie-label-text {
+  fill: var(--foreground);
+  font-size: 12px;
+}
+
+.recharts-pie-label-line {
+  stroke: var(--muted-foreground);
+}
+
+.recharts-cartesian-grid line {
+  stroke: var(--border);
+}
+
+.recharts-default-tooltip {
+  background-color: var(--card) !important;
+  border-color: var(--border) !important;
+  color: var(--card-foreground) !important;
+}
+
+/* Arabic RTL */
+[dir='rtl'] {
+  direction: rtl;
+}
+
+@layer utilities {
+  /* Soft, layered card elevation — quiet in light, a touch of lift in dark */
+  .shadow-card {
+    box-shadow:
+      0 1px 2px -1px rgb(24 23 18 / 0.08),
+      0 2px 8px -2px rgb(24 23 18 / 0.06);
+  }
+  .dark .shadow-card {
+    box-shadow:
+      0 1px 2px -1px rgb(0 0 0 / 0.5),
+      0 4px 16px -4px rgb(0 0 0 / 0.4);
+  }
+  .shadow-card-hover {
+    box-shadow:
+      0 2px 4px -2px rgb(24 23 18 / 0.1),
+      0 8px 24px -6px rgb(11 122 85 / 0.14);
+  }
+  .dark .shadow-card-hover {
+    box-shadow:
+      0 2px 6px -2px rgb(0 0 0 / 0.55),
+      0 10px 30px -6px rgb(0 0 0 / 0.5);
+  }
+  /* Tabular figures for aligned columns / axis ticks */
+  .nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* ── Phone layouts for tables (see components/ui/table.tsx) ── */
+@media (max-width: 639px) {
+  /* cards: one card per row, column name beside each value */
+  .rtable-cards,
+  .rtable-cards tbody,
+  .rtable-cards tr,
+  .rtable-cards td {
+    display: block;
+    width: 100%;
+  }
+  /* keep sortable headers as tappable chips, hide the rest */
+  .rtable-cards thead {
+    display: block;
+  }
+  .rtable-cards thead tr {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    border: 0 !important;
+    margin-bottom: 0.5rem;
+  }
+  .rtable-cards thead th {
+    display: none;
+  }
+  .rtable-cards thead th.cursor-pointer {
+    display: inline-flex;
+    align-items: center;
+    height: auto;
+    padding: 0.25rem 0.625rem;
+    border: 1px solid var(--border);
+    border-radius: 9999px;
+    background: var(--card);
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+  .rtable-cards tbody tr {
+    margin-bottom: 0.75rem;
+    padding: 0.5rem 0.875rem;
+    border: 1px solid var(--border) !important;
+    border-radius: 0.75rem;
+    background: var(--card);
+  }
+  .rtable-cards tbody td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    min-height: 2rem;
+    max-width: none !important;
+    padding: 0.25rem 0 !important;
+    border: 0;
+    text-align: end !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    position: static !important;
+    overflow-wrap: anywhere;
+  }
+  .rtable-cards tbody td + td {
+    border-top: 1px dashed var(--border);
+  }
+  .rtable-cards tbody td::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    max-width: 45%;
+    text-align: start;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--muted-foreground);
+  }
+  .rtable-cards tbody td[data-label=""]::before,
+  .rtable-cards tbody td:not([data-label])::before {
+    content: none;
+  }
+  .rtable-cards tbody td[data-label=""] {
+    justify-content: flex-end;
+  }
+  .rtable-cards tbody td[colspan] {
+    justify-content: center;
+    text-align: center !important;
+  }
+  /* a card's own content (badges, buttons) wraps instead of overflowing */
+  .rtable-cards tbody td > * {
+    min-width: 0;
+  }
+
+  /* grid: name + total on top, 12 month boxes below */
+  .rtable-grid,
+  .rtable-grid thead,
+  .rtable-grid tbody {
+    display: block;
+    width: 100%;
+  }
+  .rtable-grid tr {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    column-gap: 2px;
+    row-gap: 0.375rem;
+    padding: 0.5rem 0.625rem;
+  }
+  .rtable-grid tr > * {
+    grid-row: 2;
+    padding: 0 !important;
+    height: auto;
+    min-width: 0;
+    position: static !important;
+    text-align: center;
+  }
+  .rtable-grid tr > :first-child {
+    grid-row: 1;
+    grid-column: 1 / 8;
+    text-align: start !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rtable-grid tr > :last-child {
+    grid-row: 1;
+    grid-column: 8 / 13;
+    text-align: end !important;
+  }
+  .rtable-grid thead th {
+    font-size: 0.625rem;
+  }
+  /* the month header stays visible while the rows scroll */
+  .rtable-grid thead {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+  }
+  .rtable-grid td button {
+    width: 100%;
+    max-width: 1.5rem;
+  }
+}
+
+/* ── Phone basics ── */
+@media (max-width: 639px) {
+  /* iOS Safari zooms (and the page starts panning sideways) when a field
+     with text under 16px is focused — keep every field at 16px on phones */
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* page action buttons: two per row on phones instead of a tall stack */
+@media (max-width: 639px) {
+  .phone-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .phone-actions > button {
+    height: auto;
+    min-height: 2.5rem;
+    padding: 0.5rem 0.625rem;
+    white-space: normal;
+    line-height: 1.2;
+  }
+}
+
+/* nothing should ever push the page sideways; clip as a last resort */
+html,
+body {
+  overflow-x: clip;
+}
+
+/* ── Month dots (components/payments/month-dot.tsx) ──
+   colours are applied inline with these as overridable tokens */
+:root {
+  --pay-bank: #15803d;
+  --pay-cash: #0891b2;
+  --pay-due: #dc2626;
+  --pay-future: #d4d4d8;
+}
+.dark {
+  --pay-bank: #16a34a;
+  --pay-cash: #06b6d4;
+  --pay-due: #ef4444;
+  --pay-future: #52525b;
+}
+
+/* Header cells default to centred in browsers; follow the reading
+   direction instead (right in Arabic, left in English). Utilities such as
+   text-center / text-end still override this. */
+@layer base {
+  th {
+    text-align: start;
+  }
+}

@@ -1,0 +1,1367 @@
+"use client"
+
+import { useState, useEffect, useMemo } from "react"
+import { usePathname } from "next/navigation"
+import { useStore } from "@/lib/store"
+import { useToast } from "@/components/ui/use-toast"
+import { testConnection } from "@/lib/data"
+import { buildingFloors } from "@/lib/constants"
+import { CURRENCY_LABEL, formatCurrency } from "@/lib/utils"
+import { parseAmount } from "@/lib/csv"
+import type { Apartment, CategoryPerson, YearlyHistory, ExpenseCategory } from "@/lib/types"
+import { subcategoryNames } from "@/lib/subcategories"
+
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
+import { Switch } from "@/components/ui/switch"
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+  CardFooter,
+} from "@/components/ui/card"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { useI18n } from "@/lib/i18n"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog"
+import { Plus, Trash2, Check, Pencil, X, Users, History, LayoutGrid, Tags, Database, AlertTriangle, Wallet } from "lucide-react"
+
+// natural unit sort: "2" before "10"
+const unitCompare = (a: string, b: string) =>
+  a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
+
+export default function SettingsPage() {
+  const {
+    state,
+    updateSettings,
+    addPerson,
+    updatePerson,
+    deletePerson,
+    addCategory,
+    updateCategory,
+    deleteCategory,
+    updateExpense,
+    addHistory,
+    updateHistory,
+    deleteHistory,
+    addApartment,
+    updateApartment,
+    deleteApartment,
+  } = useStore()
+  const { toast } = useToast()
+  const { t, lang } = useI18n()
+  const pathname = usePathname()
+
+  const [buildingName, setBuildingName] = useState("")
+  const [totalApartments, setTotalApartments] = useState("")
+  const [expectedIncome, setExpectedIncome] = useState("")
+  const [expectedExpenditure, setExpectedExpenditure] = useState("")
+  const [numBuildings, setNumBuildings] = useState("1")
+  const [numFloors, setNumFloors] = useState("13")
+  const [mezzanineFloors, setMezzanineFloors] = useState("2")
+  const [apartmentsPerFloor, setApartmentsPerFloor] = useState("0")
+  const [openingCash, setOpeningCash] = useState("0")
+  const [openingBank, setOpeningBank] = useState("0")
+  const [openingDate, setOpeningDate] = useState("")
+
+  const [connStatus, setConnStatus] = useState<'checking' | 'connected' | 'error'>('checking')
+  const [connMessage, setConnMessage] = useState('')
+
+  // per-category "add person" inputs, keyed by category id
+  const [newPersonName, setNewPersonName] = useState<Record<string, string>>({})
+  // person being renamed inline
+  const [editingPersonId, setEditingPersonId] = useState<string | null>(null)
+  const [editingPersonName, setEditingPersonName] = useState("")
+
+  // previous-years form
+  const [histYear, setHistYear] = useState("")
+  const [histIncome, setHistIncome] = useState("")
+  const [histExpenditure, setHistExpenditure] = useState("")
+  // optional cash/bank splits — they carry the year into the dashboard balances
+  const [histIncomeCash, setHistIncomeCash] = useState("")
+  const [histIncomeBank, setHistIncomeBank] = useState("")
+  const [histExpCash, setHistExpCash] = useState("")
+  const [histExpBank, setHistExpBank] = useState("")
+  // whether this year's cash/bank splits carry into the dashboard balances
+  const [histOnDashboard, setHistOnDashboard] = useState(true)
+  const [editingHistId, setEditingHistId] = useState<string | null>(null)
+  // breakdown editor state: which year row is expanded + its percents
+  const [breakdownHistId, setBreakdownHistId] = useState<string | null>(null)
+  const [breakdownPercents, setBreakdownPercents] = useState<Record<string, string>>({})
+
+  // floor-plan editor state
+  const [planBuilding, setPlanBuilding] = useState("1")
+  const [unitDraft, setUnitDraft] = useState<Record<string, string>>({})
+  const [deletePlanApt, setDeletePlanApt] = useState<Apartment | null>(null)
+
+  // category delete confirmation
+  const [deleteConfirmCategory, setDeleteConfirmCategory] = useState<ExpenseCategory | null>(null)
+
+  const [restoring, setRestoring] = useState(false)
+  const [newCategoryName, setNewCategoryName] = useState("")
+  // "Delete all my data" confirmation
+  const [wipeOpen, setWipeOpen] = useState(false)
+  const [wipeText, setWipeText] = useState("")
+  const [wiping, setWiping] = useState(false)
+  const isDemo = pathname.startsWith("/guest")
+
+  async function handleDeleteAll() {
+    setWiping(true)
+    try {
+      const res = await fetch("/api/backup", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: "DELETE" }),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`)
+      toast({ title: t("All data deleted"), description: t("Starting fresh — your account is still here."), variant: "success" })
+      // reload so every page starts from the now-empty database
+      window.location.assign("/")
+    } catch (err) {
+      toast({
+        title: t("Delete failed"),
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      })
+      setWiping(false)
+    }
+  }
+  // per-category "add subcategory" inputs, keyed by category id
+  const [newSubName, setNewSubName] = useState<Record<string, string>>({})
+
+  // subcategories are the category's staff: adding one here adds a
+  // staff member, removing one removes them (or an older stored name)
+  function handleAddSubcategory(cat: ExpenseCategory) {
+    const name = (newSubName[cat.id] || "").trim()
+    if (!name) return
+    const subs = subcategoryNames(cat.id, state.people, state.categories)
+    if (subs.some((x) => x.toLowerCase() === name.toLowerCase())) {
+      toast({ title: t("Subcategory already exists"), variant: "destructive" })
+      return
+    }
+    addPerson(cat.id, name)
+    setNewSubName((m) => ({ ...m, [cat.id]: "" }))
+  }
+
+  function handleRemoveSubcategory(cat: ExpenseCategory, name: string) {
+    const person = state.people.find((p) => p.category_id === cat.id && p.name === name)
+    if (person) deletePerson(person.id)
+    const legacy = cat.subcategories ?? []
+    if (legacy.includes(name)) updateCategory({ ...cat, subcategories: legacy.filter((x) => x !== name) })
+  }
+
+  function handleAddCategory() {
+    const name = newCategoryName.trim().toLowerCase()
+    if (!name) return
+    if (state.categories.some((c) => c.name.trim().toLowerCase() === name)) {
+      toast({ title: t("Category already exists"), variant: "destructive" })
+      return
+    }
+    addCategory(name)
+    setNewCategoryName("")
+  }
+
+  // the menu links to sections (/settings#staff); the page renders only
+  // after the data loads, so scroll to the section once it exists
+  useEffect(() => {
+    if (!state.loaded) return
+    const id = window.location.hash.slice(1)
+    if (id) document.getElementById(id)?.scrollIntoView({ block: "start" })
+  }, [state.loaded])
+
+  async function handleRestore(file: File) {
+    setRestoring(true)
+    try {
+      const res = await fetch("/api/backup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: await file.text(),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`)
+      toast({ title: t("Backup restored") })
+      // reload so every page shows the restored data
+      window.location.reload()
+    } catch (err) {
+      toast({
+        title: t("Restore failed"),
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      })
+      setRestoring(false)
+    }
+  }
+
+  useEffect(() => {
+    testConnection().then(({ ok, message }) => {
+      setConnStatus(ok ? 'connected' : 'error')
+      setConnMessage(message)
+    })
+  }, [])
+
+  useEffect(() => {
+    if (state.loaded) {
+      setBuildingName(state.settings.building_name)
+      setTotalApartments(state.settings.total_apartments.toString())
+      setExpectedIncome(state.settings.expected_yearly_income.toString())
+      setExpectedExpenditure(
+        state.settings.expected_yearly_expenditure.toString()
+      )
+      setNumBuildings(state.settings.num_buildings.toString())
+      setNumFloors(state.settings.num_floors.toString())
+      setMezzanineFloors(state.settings.mezzanine_floors.toString())
+      setApartmentsPerFloor(state.settings.apartments_per_floor.toString())
+      setOpeningCash(String(state.settings.opening_cash ?? 0))
+      setOpeningBank(String(state.settings.opening_bank ?? 0))
+      setOpeningDate(state.settings.opening_balance_date ?? "")
+    }
+  }, [state.loaded, state.settings])
+
+  // ── Floor plan ──
+  const numBuildingsSaved = Math.max(1, state.settings.num_buildings || 1)
+  const planFloors = useMemo(
+    () => buildingFloors(state.settings.mezzanine_floors, state.settings.num_floors),
+    [state.settings.mezzanine_floors, state.settings.num_floors]
+  )
+  const aptsByFloor = useMemo(() => {
+    const m = new Map<string, Apartment[]>()
+    for (const a of state.apartments) {
+      if (numBuildingsSaved > 1 && String(a.building_no ?? 1) !== planBuilding) continue
+      const arr = m.get(a.floor) ?? []
+      arr.push(a)
+      m.set(a.floor, arr)
+    }
+    for (const arr of m.values()) arr.sort((x, y) => unitCompare(x.unit_number, y.unit_number))
+    return m
+  }, [state.apartments, planBuilding, numBuildingsSaved])
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+
+    const parsedApartments = parseInt(totalApartments, 10)
+    const parsedIncome = parseFloat(expectedIncome)
+    const parsedExpenditure = parseFloat(expectedExpenditure)
+    const parsedBuildings = Math.max(1, parseInt(numBuildings, 10) || 1)
+    const parsedFloors = Math.max(1, parseInt(numFloors, 10) || 1)
+    const parsedMezzanine = Math.max(0, parseInt(mezzanineFloors, 10) || 0)
+    const parsedPerFloor = Math.max(0, parseInt(apartmentsPerFloor, 10) || 0)
+
+    if (isNaN(parsedApartments) || isNaN(parsedIncome) || isNaN(parsedExpenditure)) {
+      return
+    }
+
+    updateSettings({
+      building_name: buildingName.trim(),
+      total_apartments: parsedApartments,
+      expected_yearly_income: parsedIncome,
+      expected_yearly_expenditure: parsedExpenditure,
+      num_buildings: parsedBuildings,
+      num_floors: parsedFloors,
+      mezzanine_floors: parsedMezzanine,
+      apartments_per_floor: parsedPerFloor,
+    })
+
+    toast({
+      title: t("Settings saved!"),
+      description: t("Your building settings have been updated."),
+      variant: "success",
+    })
+  }
+
+  // ── Starting balance ──
+
+  function handleSaveOpening(e: React.FormEvent) {
+    e.preventDefault()
+    const cash = parseAmount(openingCash || "0")
+    const bank = parseAmount(openingBank || "0")
+    if (isNaN(cash) || isNaN(bank)) {
+      toast({ title: t("Enter the amounts as numbers"), variant: "destructive" })
+      return
+    }
+    if (!openingDate) {
+      toast({ title: t("Pick the date of the starting balance"), variant: "destructive" })
+      return
+    }
+    updateSettings({ opening_cash: cash, opening_bank: bank, opening_balance_date: openingDate })
+    toast({
+      title: t("Starting balance saved"),
+      description: t("Cash {cash} and bank {bank} on {date}.", { cash: formatCurrency(cash), bank: formatCurrency(bank), date: openingDate }),
+      variant: "success",
+    })
+  }
+
+  function handleClearOpening() {
+    updateSettings({ opening_cash: 0, opening_bank: 0, opening_balance_date: null })
+    toast({ title: t("Starting balance removed"), variant: "success" })
+  }
+
+  const openingSaved = !!state.settings.opening_balance_date
+  const recordsBeforeOpening = useMemo(() => {
+    const from = state.settings.opening_balance_date
+    if (!from) return 0
+    return (
+      state.payments.filter((p) => p.date_paid < from).length +
+      state.expenses.filter((x) => x.date < from).length +
+      state.transfers.filter((x) => x.date < from).length
+    )
+  }, [state.settings.opening_balance_date, state.payments, state.expenses, state.transfers])
+
+  // ── Category people ──
+
+  function peopleFor(categoryId: string): CategoryPerson[] {
+    return state.people.filter((p) => p.category_id === categoryId)
+  }
+
+  function handleAddPerson(categoryId: string) {
+    const name = (newPersonName[categoryId] || "").trim()
+    if (!name) return
+    addPerson(categoryId, name)
+    setNewPersonName((m) => ({ ...m, [categoryId]: "" }))
+  }
+
+  function startRenamePerson(p: CategoryPerson) {
+    setEditingPersonId(p.id)
+    setEditingPersonName(p.name)
+  }
+
+  function saveRenamePerson(p: CategoryPerson) {
+    const name = editingPersonName.trim()
+    if (name && name !== p.name) {
+      updatePerson({ ...p, name })
+      // keep existing expenses of this category pointing at the person
+      for (const e of state.expenses) {
+        if (e.category_id !== p.category_id) continue
+        const vendor = e.vendor === p.name
+        const sub = e.subcategory === p.name
+        if (vendor || sub) {
+          updateExpense({ ...e, vendor: vendor ? name : e.vendor, subcategory: sub ? name : e.subcategory })
+        }
+      }
+    }
+    setEditingPersonId(null)
+    setEditingPersonName("")
+  }
+
+  // ── Previous years ──
+
+  function startEditHistory(h: YearlyHistory) {
+    setEditingHistId(h.id)
+    setHistYear(String(h.year))
+    setHistIncome(String(h.income))
+    setHistExpenditure(String(h.expenditure))
+    setHistIncomeCash(h.income_cash ? String(h.income_cash) : "")
+    setHistIncomeBank(h.income_bank ? String(h.income_bank) : "")
+    setHistExpCash(h.expenditure_cash ? String(h.expenditure_cash) : "")
+    setHistExpBank(h.expenditure_bank ? String(h.expenditure_bank) : "")
+    setHistOnDashboard(h.on_dashboard !== false)
+  }
+
+  function resetHistoryForm() {
+    setEditingHistId(null)
+    setHistYear("")
+    setHistIncome("")
+    setHistExpenditure("")
+    setHistIncomeCash("")
+    setHistIncomeBank("")
+    setHistExpCash("")
+    setHistExpBank("")
+    setHistOnDashboard(true)
+  }
+
+  function handleSubmitHistory() {
+    const year = parseInt(histYear, 10)
+    const income = parseAmount(histIncome)
+    const expenditure = parseAmount(histExpenditure)
+    const currentYear = new Date().getFullYear()
+    if (isNaN(year) || year < 1900 || year > currentYear || isNaN(income) || isNaN(expenditure)) {
+      toast({
+        title: t("Invalid year data"),
+        description: t("Enter a year up to {year} plus its income and expenditure totals.", { year: currentYear }),
+        variant: "destructive",
+      })
+      return
+    }
+    const duplicate = state.history.find((h) => h.year === year && h.id !== editingHistId)
+    if (duplicate) {
+      toast({ title: t("Year already exists"), description: t("Edit the existing {year} row instead.", { year }), variant: "destructive" })
+      return
+    }
+    // splits are optional; blank = 0 = the year does not touch the balances
+    const splits = {
+      income_cash: parseAmount(histIncomeCash) || 0,
+      income_bank: parseAmount(histIncomeBank) || 0,
+      expenditure_cash: parseAmount(histExpCash) || 0,
+      expenditure_bank: parseAmount(histExpBank) || 0,
+    }
+    if (editingHistId) {
+      const existing = state.history.find((h) => h.id === editingHistId)
+      if (existing) updateHistory({ ...existing, year, income, expenditure, ...splits, on_dashboard: histOnDashboard })
+    } else {
+      addHistory({ year, income, expenditure, ...splits, on_dashboard: histOnDashboard, expense_breakdown: {} })
+    }
+    resetHistoryForm()
+  }
+
+  function openBreakdown(h: YearlyHistory) {
+    setBreakdownHistId(h.id)
+    const percents: Record<string, string> = {}
+    for (const cat of state.categories) {
+      const v = h.expense_breakdown[cat.name]
+      percents[cat.name] = v ? String(v) : ""
+    }
+    setBreakdownPercents(percents)
+  }
+
+  function saveBreakdown(h: YearlyHistory) {
+    const breakdown: Record<string, number> = {}
+    for (const [name, raw] of Object.entries(breakdownPercents)) {
+      const v = parseFloat(raw)
+      if (!isNaN(v) && v > 0) breakdown[name] = v
+    }
+    updateHistory({ ...h, expense_breakdown: breakdown })
+    setBreakdownHistId(null)
+    toast({ title: t("Breakdown saved"), variant: "success" })
+  }
+
+  if (!state.loaded) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <p className="text-muted-foreground">{t("Loading settings...")}</p>
+      </div>
+    )
+  }
+
+  const floors = buildingFloors(
+    parseInt(mezzanineFloors, 10) || 0,
+    parseInt(numFloors, 10) || 1
+  )
+  const perFloor = Math.max(0, parseInt(apartmentsPerFloor, 10) || 0)
+  const buildings = Math.max(1, parseInt(numBuildings, 10) || 1)
+  const capacity = perFloor > 0 ? floors.length * perFloor * buildings : 0
+
+  const breakdownTotal = Object.values(breakdownPercents).reduce((s, v) => {
+    const n = parseFloat(v)
+    return s + (isNaN(n) ? 0 : n)
+  }, 0)
+
+  // ── Floor plan actions ──
+  function addUnitToFloor(floor: string) {
+    const buildingNo = numBuildingsSaved > 1 ? parseInt(planBuilding, 10) || 1 : 1
+    const onFloor = state.apartments.filter(
+      (a) => a.floor === floor && (a.building_no ?? 1) === buildingNo
+    )
+    const isNum = /^\d+$/.test(floor)
+    // suggest the next unit name; keep bumping if it collides
+    let n = onFloor.length + 1
+    const taken = new Set(state.apartments.map((a) => a.unit_number))
+    let unit = isNum ? `${floor}${String(n).padStart(2, "0")}` : `${floor}-${n}`
+    while (taken.has(unit)) {
+      n += 1
+      unit = isNum ? `${floor}${String(n).padStart(2, "0")}` : `${floor}-${n}`
+    }
+    addApartment({
+      unit_number: unit,
+      building_no: buildingNo,
+      floor,
+      primary_resident_name: "",
+      secondary_resident_name: "",
+      phone: "",
+      phone2: "",
+      email: "",
+      payment_interval: "monthly",
+      monthly_due_amount: 0,
+      occupancy_status: "resident",
+      notes: "",
+    })
+  }
+
+  function commitUnitName(apt: Apartment) {
+    const next = (unitDraft[apt.id] ?? apt.unit_number).trim()
+    setUnitDraft((m) => {
+      const { [apt.id]: _drop, ...rest } = m
+      void _drop
+      return rest
+    })
+    if (next && next !== apt.unit_number) updateApartment({ ...apt, unit_number: next })
+  }
+
+  const planApartmentCount = Array.from(aptsByFloor.values()).reduce((s, a) => s + a.length, 0)
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">{t("Building Setup")}</h1>
+        <p className="text-sm text-muted-foreground">
+          {t("Configure your building's baseline settings")}
+        </p>
+      </div>
+
+      <Card id="building" className="max-w-2xl scroll-mt-20">
+        <form onSubmit={handleSubmit}>
+          <CardHeader>
+            <CardTitle>{t("Building Settings")}</CardTitle>
+            <CardDescription>
+              {t("Set the basic parameters for your building to enable accurate financial tracking and reporting.")}
+            </CardDescription>
+          </CardHeader>
+
+          <CardContent className="space-y-6">
+            <div className="space-y-2">
+              <Label htmlFor="building-name">{t("Building Name")}</Label>
+              <Input
+                id="building-name"
+                type="text"
+                placeholder={t("e.g. El Nour Tower")}
+                value={buildingName}
+                onChange={(e) => setBuildingName(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                {t("The name of the building you live in.")}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="num-buildings">{t("Buildings")}</Label>
+                <Input
+                  id="num-buildings"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={numBuildings}
+                  onChange={(e) => setNumBuildings(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="num-floors">{t("Floors (numbered)")}</Label>
+                <Input
+                  id="num-floors"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={numFloors}
+                  onChange={(e) => setNumFloors(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="mezzanine-floors">{t("Mezzanine Floors")}</Label>
+                <Input
+                  id="mezzanine-floors"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={mezzanineFloors}
+                  onChange={(e) => setMezzanineFloors(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="apartments-per-floor">{t("Apartments per Floor")}</Label>
+                <Input
+                  id="apartments-per-floor"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={apartmentsPerFloor}
+                  onChange={(e) => setApartmentsPerFloor(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground -mt-2">
+              {t("These set hard limits when adding apartments: only floors {from}–{to} are selectable", { from: floors[0], to: floors[floors.length - 1] })}
+              {perFloor > 0
+                ? t(", at most {n} apartments per floor (capacity {cap})", { n: perFloor, cap: capacity })
+                : t(". Set apartments per floor above 0 to also cap each floor")}
+              .
+            </p>
+
+            <div className="space-y-2">
+              <Label htmlFor="total-apartments">{t("Total Apartments")}</Label>
+              <Input
+                id="total-apartments"
+                type="number"
+                min="0"
+                step="1"
+                placeholder="e.g. 12"
+                value={totalApartments}
+                onChange={(e) => setTotalApartments(e.target.value)}
+                required
+              />
+              <p className="text-xs text-muted-foreground">
+                {t("The total number of apartments in the building.")}
+                {capacity > 0 && ` ${t("Structure above allows up to {n}.", { n: capacity })}`}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="expected-income">
+                {t("Expected Yearly Income (LE)")}
+              </Label>
+              <Input
+                id="expected-income"
+                type="number"
+                min="0"
+                step="any"
+                placeholder="e.g. 30000"
+                value={expectedIncome}
+                onChange={(e) => setExpectedIncome(e.target.value)}
+                required
+              />
+              <p className="text-xs text-muted-foreground">
+                {t("The total income you expect to collect from all apartments per year.")}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="expected-expenditure">
+                {t("Expected Yearly Expenditure (LE)")}
+              </Label>
+              <Input
+                id="expected-expenditure"
+                type="number"
+                min="0"
+                step="any"
+                placeholder="e.g. 24000"
+                value={expectedExpenditure}
+                onChange={(e) => setExpectedExpenditure(e.target.value)}
+                required
+              />
+              <p className="text-xs text-muted-foreground">
+                {t("The total amount you expect to spend on building expenses per year.")}
+              </p>
+            </div>
+          </CardContent>
+
+          <CardFooter>
+            <Button type="submit">{t("Save Settings")}</Button>
+          </CardFooter>
+        </form>
+      </Card>
+
+      {/* Starting balance — money already held on first use */}
+      <Card id="opening-balance" className="max-w-2xl scroll-mt-20">
+        <form onSubmit={handleSaveOpening}>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Wallet className="h-5 w-5" /> {t("Starting Balance")}
+            </CardTitle>
+            <CardDescription>
+              {t("The money already in the cash box and in the bank account when you start using the app. The dashboard balances start from these amounts on the date you pick.")}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="opening-cash">{t("Cash on hand")} ({CURRENCY_LABEL[lang]})</Label>
+                <Input id="opening-cash" type="number" inputMode="decimal" step="any" value={openingCash} onChange={(e) => setOpeningCash(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="opening-bank">{t("Bank balance")} ({CURRENCY_LABEL[lang]})</Label>
+                <Input id="opening-bank" type="number" inputMode="decimal" step="any" value={openingBank} onChange={(e) => setOpeningBank(e.target.value)} />
+              </div>
+            </div>
+            <div className="space-y-2 sm:max-w-[50%] sm:pe-2">
+              <Label htmlFor="opening-date">{t("Balance date")}</Label>
+              <Input id="opening-date" type="date" value={openingDate} onChange={(e) => setOpeningDate(e.target.value)} />
+              <p className="text-xs text-muted-foreground">
+                {t("Collections, expenses and transfers dated before this day are already inside the starting balance, so they are not added again. They still appear in the logs and reports.")}
+              </p>
+            </div>
+            {openingSaved && recordsBeforeOpening > 0 && (
+              <p className="rounded-md bg-amber-50 p-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                {t("{n} records are dated before the balance date and don't change the balances.", { n: recordsBeforeOpening })}
+              </p>
+            )}
+          </CardContent>
+          <CardFooter className="flex flex-wrap gap-2">
+            <Button type="submit">{t("Save Starting Balance")}</Button>
+            {openingSaved && (
+              <Button type="button" variant="outline" onClick={handleClearOpening}>
+                {t("Remove starting balance")}
+              </Button>
+            )}
+          </CardFooter>
+        </form>
+      </Card>
+
+      {/* Floor plan — per-floor apartments with editable names */}
+      <Card id="floor-plan" className="max-w-2xl scroll-mt-20">
+        <CardHeader>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <LayoutGrid className="h-5 w-5" /> Floor Plan
+              </CardTitle>
+              <CardDescription>
+                Set exactly how many apartments each floor holds and name each one — a
+                floor can carry several joined units. Blank details (resident, dues) can be
+                filled later on the Apartments page.
+              </CardDescription>
+            </div>
+            {numBuildingsSaved > 1 && (
+              <Select value={planBuilding} onValueChange={setPlanBuilding}>
+                <SelectTrigger className="w-[150px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: numBuildingsSaved }, (_, i) => String(i + 1)).map((b) => (
+                    <SelectItem key={b} value={b}>
+                      Building {b}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          <p className="mb-2 text-sm text-muted-foreground">
+            {planApartmentCount} apartment{planApartmentCount !== 1 ? "s" : ""}
+            {numBuildingsSaved > 1 ? ` in Building ${planBuilding}` : ""} across{" "}
+            {planFloors.length} floors
+          </p>
+          <div className="divide-y divide-border">
+            {planFloors.map((floor) => {
+              const apts = aptsByFloor.get(floor) ?? []
+              return (
+                <div key={floor} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start">
+                  <div className="w-28 shrink-0 pt-1.5">
+                    <span className="text-sm font-semibold">
+                      {floor.startsWith("M") ? `Mezzanine ${floor}` : `Floor ${floor}`}
+                    </span>
+                    <span className="ms-1 text-xs text-muted-foreground">({apts.length})</span>
+                  </div>
+                  <div className="flex flex-1 flex-wrap items-center gap-2">
+                    {apts.map((a) => (
+                      <div
+                        key={a.id}
+                        className="flex items-center gap-0.5 rounded-lg border border-border bg-muted/30 py-1 ps-1.5 pe-0.5"
+                      >
+                        <Input
+                          value={unitDraft[a.id] ?? a.unit_number}
+                          onChange={(e) => setUnitDraft((m) => ({ ...m, [a.id]: e.target.value }))}
+                          onBlur={() => commitUnitName(a)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault()
+                              ;(e.target as HTMLInputElement).blur()
+                            }
+                          }}
+                          aria-label={`Unit name on floor ${floor}`}
+                          className="h-7 w-16 border-0 bg-transparent px-1 text-center text-sm font-medium shadow-none focus-visible:ring-1"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 shrink-0"
+                          onClick={() => setDeletePlanApt(a)}
+                          aria-label={`Remove unit ${a.unit_number}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 border-dashed"
+                      onClick={() => addUnitToFloor(floor)}
+                    >
+                      <Plus className="me-1 h-3.5 w-3.5" /> Add
+                    </Button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Expense categories */}
+      <Card id="categories" className="max-w-2xl scroll-mt-20">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Tags className="h-5 w-5" /> {t("Expense Categories")}
+          </CardTitle>
+          <CardDescription>
+            {t("The categories you sort expenses into. A category's subcategories are its staff (e.g. Security → Mohamed) — the same list as Staff below, and what the expense form offers. Deleting a category also deletes its expenses and staff.")}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {state.categories.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{t("No expense categories yet.")}</p>
+          ) : (
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {state.categories.map((cat) => {
+                const n = state.expenses.filter((e) => e.category_id === cat.id).length
+                const subs = subcategoryNames(cat.id, state.people, state.categories)
+                return (
+                  <li key={cat.id} className="space-y-2 px-3 py-3">
+                    <div className="flex items-center gap-2">
+                      <span className="flex-1 font-medium capitalize">{t(cat.name)}</span>
+                      <Badge variant="secondary">{t("{n} expenses", { n })}</Badge>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => setDeleteConfirmCategory(cat)}
+                        aria-label={t("Delete {name}", { name: cat.name })}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                      </Button>
+                    </div>
+                    {/* subcategories */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-xs text-muted-foreground">{t("Subcategories:")}</span>
+                      {subs.length === 0 && <span className="text-xs text-muted-foreground">—</span>}
+                      {subs.map((name) => (
+                        <span key={name} className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/60 py-0.5 pe-1 ps-2.5 text-xs">
+                          {name}
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveSubcategory(cat, name)}
+                            className="rounded-full p-0.5 hover:bg-background"
+                            aria-label={t("Remove {name}", { name })}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="h-8"
+                        placeholder={t("Add a subcategory to {category}…", { category: t(cat.name) })}
+                        value={newSubName[cat.id] || ""}
+                        onChange={(e) => setNewSubName((m) => ({ ...m, [cat.id]: e.target.value }))}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddSubcategory(cat) } }}
+                      />
+                      <Button variant="outline" size="sm" className="h-8 shrink-0" onClick={() => handleAddSubcategory(cat)}>
+                        <Plus className="h-3.5 w-3.5" /> {t("Add")}
+                      </Button>
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+          <div className="flex items-center gap-2">
+            <Input
+              className="h-9"
+              placeholder={t("New category name…")}
+              value={newCategoryName}
+              onChange={(e) => setNewCategoryName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddCategory() } }}
+            />
+            <Button variant="outline" className="shrink-0" onClick={handleAddCategory}>
+              <Plus className="h-4 w-4" /> {t("Add")}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* People per expense category (security guards, cleaners, ...) */}
+      <Card id="staff" className="max-w-2xl scroll-mt-20">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Users className="h-5 w-5" /> {t("Staff")}
+          </CardTitle>
+          <CardDescription>
+            {t("The people working under each expense category — e.g. your security guards. They appear as vendor choices when you add an expense of that category, and you can add, rename, or remove them here at any time.")}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {state.categories.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{t("No expense categories yet.")}</p>
+          ) : (
+            state.categories.map((cat) => {
+              const people = peopleFor(cat.id)
+              return (
+                <div key={cat.id} className="space-y-2 border-b border-border pb-4 last:border-0 last:pb-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium capitalize">{t(cat.name)}</span>
+                    <Badge variant="secondary">
+                      {t("{n} people", { n: people.length })}
+                    </Badge>
+                  </div>
+                  <div className="space-y-1.5">
+                    {people.map((p) => (
+                      <div key={p.id} className="flex items-center gap-2">
+                        {editingPersonId === p.id ? (
+                          <>
+                            <Input
+                              className="h-8"
+                              value={editingPersonName}
+                              onChange={(e) => setEditingPersonName(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === "Enter") saveRenamePerson(p) }}
+                              autoFocus
+                            />
+                            <Button size="icon" className="h-8 w-8 shrink-0" onClick={() => saveRenamePerson(p)} aria-label={t("Save name")}>
+                              <Check className="h-4 w-4" />
+                            </Button>
+                            <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" onClick={() => setEditingPersonId(null)} aria-label={t("Cancel rename")}>
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="flex-1 text-sm">{p.name}</span>
+                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => startRenamePerson(p)} aria-label={t("Rename {name}", { name: p.name })}>
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => deletePerson(p.id)} aria-label={t("Remove {name}", { name: p.name })}>
+                              <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      className="h-8"
+                      placeholder={t("Add a person to {category}...", { category: t(cat.name) })}
+                      value={newPersonName[cat.id] || ""}
+                      onChange={(e) => setNewPersonName((m) => ({ ...m, [cat.id]: e.target.value }))}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddPerson(cat.id) } }}
+                    />
+                    <Button variant="outline" size="sm" className="h-8 shrink-0" onClick={() => handleAddPerson(cat.id)}>
+                      <Plus className="me-1 h-3.5 w-3.5" /> {t("Add")}
+                    </Button>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Previous years migration */}
+      <Card id="history" className="max-w-2xl scroll-mt-20">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <History className="h-5 w-5" /> {t("Previous Years")}
+          </CardTitle>
+          <CardDescription>
+            {t("Migrate earlier records without entering every payment: just the income and expenditure totals per year. Optionally set the percentage each category took of that year's expenditure for a more detailed view.")}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {state.history.length > 0 && (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t("Year")}</TableHead>
+                    <TableHead>{t("Income")}</TableHead>
+                    <TableHead>{t("Expenditure")}</TableHead>
+                    <TableHead>{t("Net")}</TableHead>
+                    <TableHead className="w-[130px] text-end">{t("Actions")}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {state.history.map((h) => {
+                    const net = h.income - h.expenditure
+                    return (
+                      <TableRow key={h.id}>
+                        <TableCell className="font-medium">{h.year}</TableCell>
+                        <TableCell>{formatCurrency(h.income)}</TableCell>
+                        <TableCell>{formatCurrency(h.expenditure)}</TableCell>
+                        <TableCell className={net < 0 ? "text-destructive font-medium" : "font-medium"}>
+                          {formatCurrency(net)}
+                        </TableCell>
+                        <TableCell className="text-end">
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => (breakdownHistId === h.id ? setBreakdownHistId(null) : openBreakdown(h))}
+                            >
+                              %
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startEditHistory(h)} aria-label={t("Edit {year}", { year: h.year })}>
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => deleteHistory(h.id)} aria-label={t("Delete {year}", { year: h.year })}>
+                              <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          {/* Expenditure percentage breakdown editor */}
+          {breakdownHistId && (() => {
+            const h = state.history.find((x) => x.id === breakdownHistId)
+            if (!h) return null
+            return (
+              <div className="rounded-lg border border-border p-4 space-y-3">
+                <p className="text-sm font-medium">
+                  {t("{year} expenditure breakdown ({total} total)", { year: h.year, total: formatCurrency(h.expenditure) })}
+                </p>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  {state.categories.map((cat) => {
+                    const pct = parseFloat(breakdownPercents[cat.name] || "")
+                    return (
+                      <div key={cat.id} className="space-y-1">
+                        <Label className="text-xs capitalize">{t(cat.name)}</Label>
+                        <div className="flex items-center gap-1">
+                          <Input
+                            className="h-8"
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="any"
+                            placeholder="0"
+                            value={breakdownPercents[cat.name] || ""}
+                            onChange={(e) =>
+                              setBreakdownPercents((m) => ({ ...m, [cat.name]: e.target.value }))
+                            }
+                          />
+                          <span className="text-xs text-muted-foreground">%</span>
+                        </div>
+                        {!isNaN(pct) && pct > 0 && (
+                          <p className="text-[10px] text-muted-foreground">
+                            ≈ {formatCurrency((h.expenditure * pct) / 100)}
+                          </p>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+                <p className={`text-xs ${Math.abs(breakdownTotal - 100) > 0.5 && breakdownTotal > 0 ? "text-yellow-600 dark:text-yellow-400" : "text-muted-foreground"}`}>
+                  {t("Total:")} {breakdownTotal}%{breakdownTotal > 0 && Math.abs(breakdownTotal - 100) > 0.5 ? ` — ${t("doesn't add up to 100%")}` : ""}
+                </p>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => saveBreakdown(h)}>{t("Save Breakdown")}</Button>
+                  <Button size="sm" variant="outline" onClick={() => setBreakdownHistId(null)}>{t("Cancel")}</Button>
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* Add / edit year form */}
+          <div className="rounded-lg border border-border p-4 space-y-3">
+            <p className="text-sm font-medium">
+              {editingHistId ? t("Edit year") : t("Add a previous year")}
+            </p>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="hist-year" className="text-xs">{t("Year")}</Label>
+                <Input
+                  id="hist-year"
+                  type="number"
+                  placeholder="e.g. 2024"
+                  value={histYear}
+                  onChange={(e) => setHistYear(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="hist-income" className="text-xs">{t("Income (LE)")}</Label>
+                <Input
+                  id="hist-income"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0"
+                  value={histIncome}
+                  onChange={(e) => setHistIncome(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="hist-expenditure" className="text-xs">{t("Expenditure (LE)")}</Label>
+                <Input
+                  id="hist-expenditure"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0"
+                  value={histExpenditure}
+                  onChange={(e) => setHistExpenditure(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* Optional cash/bank split → carries the year into the dashboard balances */}
+            <div className="rounded-md bg-muted/40 p-3 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <Label className="text-xs">{t("Affects dashboard balances")}</Label>
+                  <p className="text-xs text-muted-foreground">{t("Off = record-only; the cash/bank splits below never touch the dashboard.")}</p>
+                </div>
+                <Switch checked={histOnDashboard} onCheckedChange={setHistOnDashboard} />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t("Optional: split the totals between cash and bank to add this year's money to the dashboard's Cash on Hand and Bank Balance. Leave blank to keep the year as record-only.")}
+              </p>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div className="space-y-1">
+                  <Label htmlFor="hist-income-cash" className="text-xs">{t("Income — Cash")}</Label>
+                  <Input
+                    id="hist-income-cash"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="0"
+                    value={histIncomeCash}
+                    onChange={(e) => setHistIncomeCash(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="hist-income-bank" className="text-xs">{t("Income — Bank")}</Label>
+                  <Input
+                    id="hist-income-bank"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="0"
+                    value={histIncomeBank}
+                    onChange={(e) => setHistIncomeBank(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="hist-exp-cash" className="text-xs">{t("Expenditure — Cash")}</Label>
+                  <Input
+                    id="hist-exp-cash"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="0"
+                    value={histExpCash}
+                    onChange={(e) => setHistExpCash(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="hist-exp-bank" className="text-xs">{t("Expenditure — Bank")}</Label>
+                  <Input
+                    id="hist-exp-bank"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="0"
+                    value={histExpBank}
+                    onChange={(e) => setHistExpBank(e.target.value)}
+                  />
+                </div>
+              </div>
+              {(() => {
+                if (!histOnDashboard) return null
+                const carriedCash = (parseAmount(histIncomeCash) || 0) - (parseAmount(histExpCash) || 0)
+                const carriedBank = (parseAmount(histIncomeBank) || 0) - (parseAmount(histExpBank) || 0)
+                if (carriedCash === 0 && carriedBank === 0) return null
+                return (
+                  <p className="text-xs text-muted-foreground">
+                    {t("Carries {cash} to cash and {bank} to bank on the dashboard.", { cash: formatCurrency(carriedCash), bank: formatCurrency(carriedBank) })}
+                  </p>
+                )
+              })()}
+            </div>
+
+            <div className="flex gap-2">
+              <Button size="sm" onClick={handleSubmitHistory}>
+                {editingHistId ? t("Save Year") : <><Plus className="me-1 h-3.5 w-3.5" /> {t("Add Year")}</>}
+              </Button>
+              {editingHistId && (
+                <Button size="sm" variant="outline" onClick={resetHistoryForm}>{t("Cancel")}</Button>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Data & backup */}
+      <h2 id="data" className="flex scroll-mt-20 items-center gap-2 pt-2 text-lg font-semibold">
+        <Database className="h-5 w-5" /> {t("Data & backup")}
+      </h2>
+      <Card className="max-w-2xl">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <span
+              className={
+                connStatus === 'connected'
+                  ? 'h-2.5 w-2.5 rounded-full bg-green-500 inline-block'
+                  : connStatus === 'error'
+                  ? 'h-2.5 w-2.5 rounded-full bg-red-500 inline-block'
+                  : 'h-2.5 w-2.5 rounded-full bg-yellow-400 inline-block'
+              }
+            />
+            {t("Database Connection")}
+          </CardTitle>
+          <CardDescription>
+            {connStatus === 'checking' && t('Checking connection…')}
+            {connStatus === 'connected' && t('Connected — your data is saved online in MongoDB.')}
+            {connStatus === 'error' && (
+              <span className="text-red-600 dark:text-red-400">
+                {t("Not connected:")} {connMessage}
+                <br />
+                {t("Add")} <code className="font-mono text-xs">MONGODB_URI</code>{' '}
+                {t("to your Vercel environment variables and redeploy.")}
+              </span>
+            )}
+          </CardDescription>
+        </CardHeader>
+      </Card>
+
+      {/* Backup & restore */}
+      <Card className="max-w-2xl">
+        <CardHeader>
+          <CardTitle>{t("Backup & Restore")}</CardTitle>
+          <CardDescription>
+            {t("Download a copy of all your data, or restore one. Restoring adds missing records and updates existing ones — it never deletes anything.")}
+          </CardDescription>
+        </CardHeader>
+        <CardFooter className="flex flex-wrap gap-2">
+          <Button variant="outline" asChild>
+            <a href="/api/backup" download>{t("Download backup")}</a>
+          </Button>
+          <Button variant="outline" disabled={restoring} asChild>
+            <label className="cursor-pointer">
+              {restoring ? t("Restoring…") : t("Restore from file")}
+              <input
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                disabled={restoring}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  e.target.value = ""
+                  if (file) handleRestore(file)
+                }}
+              />
+            </label>
+          </Button>
+        </CardFooter>
+      </Card>
+
+
+      {/* Danger zone — wipe all of this account's data */}
+      <Card className="max-w-2xl border-destructive/50">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-destructive">
+            <AlertTriangle className="h-5 w-5" /> {t("Delete all my data")}
+          </CardTitle>
+          <CardDescription>
+            {t("Permanently deletes every apartment, payment, expense, category, staff member, previous year, transfer, task and building setting in your account. Your login stays and the default categories are added back. Download a backup first if you might need anything.")}
+          </CardDescription>
+        </CardHeader>
+        <CardFooter className="flex flex-wrap items-center gap-3">
+          <Button variant="destructive" disabled={isDemo} onClick={() => { setWipeText(""); setWipeOpen(true) }}>
+            <Trash2 className="h-4 w-4" /> {t("Delete all my data")}
+          </Button>
+          {isDemo && <span className="text-xs text-muted-foreground">{t("Not available in demo mode.")}</span>}
+        </CardFooter>
+      </Card>
+
+      <Dialog open={wipeOpen} onOpenChange={(o) => { if (!wiping) setWipeOpen(o) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-destructive">{t("Delete all your data?")}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {t("This can't be undone. Type DELETE to confirm.")}
+          </p>
+          <Input
+            value={wipeText}
+            onChange={(e) => setWipeText(e.target.value)}
+            placeholder="DELETE"
+            dir="ltr"
+            autoComplete="off"
+            aria-label={t("Type DELETE to confirm")}
+          />
+          <DialogFooter>
+            <Button variant="outline" disabled={wiping} onClick={() => setWipeOpen(false)}>{t("Cancel")}</Button>
+            <Button variant="destructive" disabled={wipeText.trim() !== "DELETE" || wiping} onClick={handleDeleteAll}>
+              {wiping ? t("Deleting…") : t("Delete everything")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Floor-plan delete confirmation */}
+      <Dialog open={!!deletePlanApt} onOpenChange={() => setDeletePlanApt(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove apartment {deletePlanApt?.unit_number}?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This permanently deletes the apartment and every payment recorded against it.
+            This can&apos;t be undone.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletePlanApt(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (deletePlanApt) deleteApartment(deletePlanApt.id)
+                setDeletePlanApt(null)
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Category delete confirmation */}
+      <Dialog open={!!deleteConfirmCategory} onOpenChange={() => setDeleteConfirmCategory(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("Delete category {name}?", { name: deleteConfirmCategory?.name || "" })}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {t("This will permanently delete {category} and all expenses in it cannot be recategorized. This action can't be undone.", { category: deleteConfirmCategory?.name || "" })}
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteConfirmCategory(null)}>
+              {t("Cancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (deleteConfirmCategory) {
+                  deleteCategory(deleteConfirmCategory.id)
+                  toast({
+                    title: t("Category deleted"),
+                    variant: "success",
+                  })
+                }
+                setDeleteConfirmCategory(null)
+              }}
+            >
+              {t("Delete")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
